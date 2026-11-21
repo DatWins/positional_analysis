@@ -403,7 +403,7 @@ def main():
         print(f"Stockfish : {sf_path}")
         print(f"Depth     : {args.depth}")
         engine = chess.engine.SimpleEngine.popen_uci(sf_path)
-        engine.configure({"Threads": 2, "Hash": 128})
+        # Note: skip configure() — it can crash Stockfish on some Windows builds
     else:
         print("Mode: --no-engine (candidates only, no verification)")
 
