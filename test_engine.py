@@ -21,31 +21,29 @@ print(f"Testing Stockfish at: {sf_path}")
 print(f"python-chess version: {chess.__version__}")
 
 # Show what python-chess sends to Stockfish at startup
-print("\n--- Raw UCI handshake test ---")
+print("\n--- Raw UCI handshake test (bytes mode) ---")
 try:
+    import time
     proc = subprocess.Popen(
         [sf_path],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True,
     )
-    # Send UCI init
-    proc.stdin.write("uci\n")
+    proc.stdin.write(b"uci\n")
     proc.stdin.flush()
-    import time; time.sleep(0.5)
-    proc.stdin.write("isready\n")
+    time.sleep(1)
+    proc.stdin.write(b"isready\n")
     proc.stdin.flush()
     time.sleep(0.5)
-    # Send a simple go command
-    proc.stdin.write("position startpos\n")
-    proc.stdin.write("go depth 5\n")
+    proc.stdin.write(b"position startpos\n")
+    proc.stdin.write(b"go depth 5\n")
     proc.stdin.flush()
-    time.sleep(2)
-    proc.stdin.write("quit\n")
+    time.sleep(3)
+    proc.stdin.write(b"quit\n")
     proc.stdin.flush()
     out, err = proc.communicate(timeout=5)
-    lines = out.strip().splitlines()
+    lines = out.decode(errors="replace").strip().splitlines()
     for line in lines[-10:]:
         print(" ", line)
     print(f"Return code: {proc.returncode}")
@@ -53,6 +51,31 @@ try:
 except Exception as e:
     print(f"FAIL  Raw UCI failed: {e}")
 print("--- end raw test ---\n")
+
+# Check file type / architecture
+print("--- File info ---")
+try:
+    import struct
+    with open(sf_path, "rb") as f:
+        header = f.read(4)
+    if header[:2] == b"MZ":
+        print("File type: Windows PE executable (correct)")
+        # Read PE header to check architecture
+        with open(sf_path, "rb") as f:
+            f.seek(0x3C)
+            pe_offset = struct.unpack("<I", f.read(4))[0]
+            f.seek(pe_offset + 4)
+            machine = struct.unpack("<H", f.read(2))[0]
+        arch_map = {0x8664: "x86-64 (AMD64)", 0x14C: "x86 (32-bit)", 0xAA64: "ARM64"}
+        arch = arch_map.get(machine, f"unknown (0x{machine:04X})")
+        print(f"Architecture: {arch}")
+    elif header[:4] == b"\x7fELF":
+        print("File type: Linux ELF binary — WRONG! Need Windows .exe")
+    else:
+        print(f"File type: unknown (header: {header.hex()})")
+except Exception as e:
+    print(f"Could not read file header: {e}")
+print("--- end file info ---\n")
 
 # Test 1: start engine
 try:
