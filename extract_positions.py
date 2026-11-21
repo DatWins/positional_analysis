@@ -106,7 +106,7 @@ DEFAULT_STOCKFISH_PATHS = [
 ]
 
 ANALYSIS_DEPTH   = 18    # depth per position (lower = faster)
-MULTIPV          = 3     # top N engine moves
+MULTIPV          = 1     # top N engine moves (1 = safe on Windows; 3 = richer but may crash)
 MIN_ELO_DEFAULT  = 2600  # skip games below this average Elo
 PER_GAME_DEFAULT = 10    # max candidates extracted per game
 CP_SWING_MIN     = 40    # centipawn swing to flag as interesting
@@ -220,10 +220,24 @@ def find_stockfish(explicit: str | None) -> str | None:
 
 def analyse(engine: chess.engine.SimpleEngine, fen: str,
             depth: int = ANALYSIS_DEPTH) -> list[dict]:
+    """Analyse a position, returning up to MULTIPV results.
+
+    Uses a single analyse() call with multipv=MULTIPV. On Windows some
+    Stockfish builds crash with multipv>1, so we fall back to multipv=1
+    if the first call raises an exception.
+    """
     board = chess.Board(fen)
-    infos = engine.analyse(board, chess.engine.Limit(depth=depth), multipv=MULTIPV)
-    if isinstance(infos, dict):
-        infos = [infos]
+    limit = chess.engine.Limit(depth=depth)
+
+    # Try with full multipv first
+    try:
+        infos = engine.analyse(board, limit, multipv=MULTIPV)
+        if isinstance(infos, dict):
+            infos = [infos]
+    except Exception:
+        # Fall back: single best move only
+        infos = [engine.analyse(board, limit)]
+
     results = []
     for info in infos:
         pv = info.get("pv", [])
@@ -257,7 +271,7 @@ def sans_match(a: str, b: str) -> bool:
 # ──────────────────────────────────────────────────────────────────────────────
 
 def process_game(game: chess.pgn.Game, engine, per_game: int,
-                 no_engine: bool) -> list[dict]:
+                 no_engine: bool, sf_path: str | None = None) -> list[dict]:
     """Extract candidate positions from one game."""
     headers = game.headers
     white     = headers.get("White", "?")
@@ -343,7 +357,30 @@ def process_game(game: chess.pgn.Game, engine, per_game: int,
                         else:
                             cand["status"] = "FAIL"
                 except Exception as e:
-                    cand["status"] = f"ENGINE_ERROR: {e}"
+                    err_str = str(e)
+                    cand["status"] = f"ENGINE_ERROR: {err_str}"
+                    # Try to restart the engine if it died
+                    if sf_path and ("dead" in err_str or "died" in err_str or "terminated" in err_str):
+                        try:
+                            engine.quit()
+                        except Exception:
+                            pass
+                        try:
+                            engine = chess.engine.SimpleEngine.popen_uci(sf_path)
+                            # Retry this position with fresh engine
+                            top = analyse(engine, fen_before)
+                            cand["engine_top3"] = [f"{r['san']} ({score_str(r)})" for r in top]
+                            if top:
+                                cand["engine_cp"] = top[0]["cp"]
+                                top_sans = [r["san"] for r in top]
+                                if sans_match(san, top_sans[0]):
+                                    cand["status"] = "PASS"
+                                elif any(sans_match(san, s) for s in top_sans[1:]):
+                                    cand["status"] = "WARN"
+                                else:
+                                    cand["status"] = "FAIL"
+                        except Exception as e2:
+                            cand["status"] = f"ENGINE_ERROR: {e2}"
 
             candidates.append(cand)
             phase_seen[phase_folder] = phase_seen.get(phase_folder, 0) + 1
@@ -395,6 +432,7 @@ def main():
 
     # Engine setup
     engine = None
+    sf_path = None
     if not args.no_engine:
         sf_path = find_stockfish(args.stockfish)
         if sf_path is None:
@@ -441,7 +479,8 @@ def main():
                 black = headers.get("Black", "?")
                 print(f"  Processing: {white} vs {black} ({result}, avg {avg_elo:.0f})")
 
-                candidates = process_game(game, engine, args.per_game, args.no_engine)
+                candidates = process_game(game, engine, args.per_game, args.no_engine,
+                                          sf_path=sf_path if not args.no_engine else None)
                 all_candidates.extend(candidates)
                 games_processed += 1
 
