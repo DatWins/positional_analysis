@@ -14,8 +14,45 @@ except ImportError:
     print("ERROR: python-chess not installed. Run: pip install python-chess")
     sys.exit(1)
 
+import subprocess
+
 sf_path = sys.argv[1] if len(sys.argv) > 1 else "stockfish"
 print(f"Testing Stockfish at: {sf_path}")
+print(f"python-chess version: {chess.__version__}")
+
+# Show what python-chess sends to Stockfish at startup
+print("\n--- Raw UCI handshake test ---")
+try:
+    proc = subprocess.Popen(
+        [sf_path],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    # Send UCI init
+    proc.stdin.write("uci\n")
+    proc.stdin.flush()
+    import time; time.sleep(0.5)
+    proc.stdin.write("isready\n")
+    proc.stdin.flush()
+    time.sleep(0.5)
+    # Send a simple go command
+    proc.stdin.write("position startpos\n")
+    proc.stdin.write("go depth 5\n")
+    proc.stdin.flush()
+    time.sleep(2)
+    proc.stdin.write("quit\n")
+    proc.stdin.flush()
+    out, err = proc.communicate(timeout=5)
+    lines = out.strip().splitlines()
+    for line in lines[-10:]:
+        print(" ", line)
+    print(f"Return code: {proc.returncode}")
+    print("PASS  Raw UCI works fine")
+except Exception as e:
+    print(f"FAIL  Raw UCI failed: {e}")
+print("--- end raw test ---\n")
 
 # Test 1: start engine
 try:
